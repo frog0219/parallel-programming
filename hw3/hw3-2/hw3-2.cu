@@ -10,20 +10,20 @@ const int INF = (1 << 30) - 1;
 
 int n, m , matrix_size ,*dist;
 
-__global__ void phase1(int *Dist, int Round, int matrix_size);
-__global__ void phase2(int *Dist, int Round, int matrix_size);
-__global__ void phase3(int *Dist, int Round, int matrix_size);
+__global__ void phase1(int *device_dist, int Round, int matrix_size);
+__global__ void phase2(int *device_dist, int Round, int matrix_size);
+__global__ void phase3(int *device_dist, int Round, int matrix_size);
 void input(char *filename);
 void output(char *filename);
 int ceil(int a, int b) { return (a + b - 1) / b; }
 
 int main(int argc, char* argv[]) {
-    int *d_dist;
+    int *device_dist;
     input(argv[1]);
 
     cudaHostRegister(dist, matrix_size * matrix_size * sizeof(int), cudaHostRegisterDefault);
-    cudaMalloc(&d_dist, (size_t)sizeof(int) * matrix_size * matrix_size);
-    cudaMemcpyAsync(d_dist, dist, (size_t)sizeof(int) * matrix_size * matrix_size, cudaMemcpyHostToDevice, 0);
+    cudaMalloc(&device_dist, (size_t)sizeof(int) * matrix_size * matrix_size);
+    cudaMemcpyAsync(device_dist, dist, (size_t)sizeof(int) * matrix_size * matrix_size, cudaMemcpyHostToDevice, 0);
 
     int grid_size = matrix_size  / block_factor;
     dim3 block(BLOCK_SIZE, BLOCK_SIZE);      
@@ -31,15 +31,15 @@ int main(int argc, char* argv[]) {
     dim3 grid3(grid_size, grid_size);
 
     for (int r = 0; r < grid_size; ++r) {
-        phase1<<<1, block>>>(d_dist, r, matrix_size);
-        phase2<<<grid2, block>>>(d_dist, r, matrix_size);
-        phase3<<<grid3, block>>>(d_dist, r, matrix_size);
+        phase1<<<1, block>>>(device_dist, r, matrix_size);
+        phase2<<<grid2, block>>>(device_dist, r, matrix_size);
+        phase3<<<grid3, block>>>(device_dist, r, matrix_size);
     }
 
-    cudaMemcpy(dist, d_dist, (size_t)sizeof(int) * matrix_size * matrix_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(dist, device_dist, (size_t)sizeof(int) * matrix_size * matrix_size, cudaMemcpyDeviceToHost);
     output(argv[2]);
 
-    // cudaFree(d_dist);
+    // cudaFree(device_dist);
     //Free(dist);
     return 0;
 }
@@ -53,7 +53,7 @@ void input(char *filename) {
     matrix_size = ceil(n , block_factor) * block_factor;
     dist = (int *)malloc(matrix_size * matrix_size * sizeof(int));
 
-    #pragma omp parallel for collapse(2) schedule(dynamic)
+    #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < matrix_size; ++i) {
         for (int j = 0; j < matrix_size; ++j) {
             if (i == j && i < n) dist[i * matrix_size + j] = 0;
@@ -63,6 +63,7 @@ void input(char *filename) {
 
     int pair[3 * m];
     fread(pair, sizeof(int), m * 3, file);
+
     #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < m; ++i) {
         dist[pair[3 * i] * matrix_size + pair[3 * i + 1]] = pair[3 * i + 2];
@@ -78,7 +79,7 @@ void output(char* outFileName) {
     fclose(outfile);
 }
 
-__global__ void phase1(int *d_dist, int Round, int matrix_size) {
+__global__ void phase1(int *device_dist, int Round, int matrix_size) {
     int tx = threadIdx.x;
     int ty = threadIdx.y;
     __shared__ int sharedDist[2 * BLOCK_SIZE][2 * BLOCK_SIZE];
@@ -86,10 +87,10 @@ __global__ void phase1(int *d_dist, int Round, int matrix_size) {
     int base_i = Round * 2 * BLOCK_SIZE + ty;
     int base_j = Round * 2 * BLOCK_SIZE + tx;
 
-    sharedDist[ty][tx] = d_dist[base_i * matrix_size + base_j];
-    sharedDist[ty][tx + BLOCK_SIZE] = d_dist[base_i * matrix_size + base_j + BLOCK_SIZE];
-    sharedDist[ty + BLOCK_SIZE][tx] = d_dist[(base_i + BLOCK_SIZE) * matrix_size + base_j];
-    sharedDist[ty + BLOCK_SIZE][tx + BLOCK_SIZE] = d_dist[(base_i + BLOCK_SIZE) * matrix_size + base_j + BLOCK_SIZE];
+    sharedDist[ty][tx] = device_dist[base_i * matrix_size + base_j];
+    sharedDist[ty][tx + BLOCK_SIZE] = device_dist[base_i * matrix_size + base_j + BLOCK_SIZE];
+    sharedDist[ty + BLOCK_SIZE][tx] = device_dist[(base_i + BLOCK_SIZE) * matrix_size + base_j];
+    sharedDist[ty + BLOCK_SIZE][tx + BLOCK_SIZE] = device_dist[(base_i + BLOCK_SIZE) * matrix_size + base_j + BLOCK_SIZE];
 
     __syncthreads();
 
@@ -105,13 +106,13 @@ __global__ void phase1(int *d_dist, int Round, int matrix_size) {
 
     }
 
-    d_dist[base_i * matrix_size + base_j] = sharedDist[ty][tx];
-    d_dist[base_i * matrix_size + base_j + BLOCK_SIZE] = sharedDist[ty][tx + BLOCK_SIZE];
-    d_dist[(base_i + BLOCK_SIZE) * matrix_size + base_j] = sharedDist[ty + BLOCK_SIZE][tx];
-    d_dist[(base_i + BLOCK_SIZE) * matrix_size + base_j + BLOCK_SIZE] = sharedDist[ty + BLOCK_SIZE][tx + BLOCK_SIZE];
+    device_dist[base_i * matrix_size + base_j] = sharedDist[ty][tx];
+    device_dist[base_i * matrix_size + base_j + BLOCK_SIZE] = sharedDist[ty][tx + BLOCK_SIZE];
+    device_dist[(base_i + BLOCK_SIZE) * matrix_size + base_j] = sharedDist[ty + BLOCK_SIZE][tx];
+    device_dist[(base_i + BLOCK_SIZE) * matrix_size + base_j + BLOCK_SIZE] = sharedDist[ty + BLOCK_SIZE][tx + BLOCK_SIZE];
 
 }
-__global__ void phase2(int *d_dist, int Round, int matrix_size) {
+__global__ void phase2(int *device_dist, int Round, int matrix_size) {
   
     int tx = threadIdx.x;    
     int ty = threadIdx.y;    
@@ -136,8 +137,8 @@ __global__ void phase2(int *d_dist, int Round, int matrix_size) {
                 base_i = (2 * block_index + i) * BLOCK_SIZE + ty;
                 base_j = (2 * R + j) * BLOCK_SIZE + tx;
             }
-            sharedPivot[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] = d_dist[((2 * R + i) * BLOCK_SIZE + ty) * matrix_size + ((2 * R + j) * BLOCK_SIZE + tx)];
-            sharedBlock[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] = d_dist[base_i * matrix_size + base_j];
+            sharedPivot[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] = device_dist[((2 * R + i) * BLOCK_SIZE + ty) * matrix_size + ((2 * R + j) * BLOCK_SIZE + tx)];
+            sharedBlock[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] = device_dist[base_i * matrix_size + base_j];
         }
     }
    
@@ -168,13 +169,13 @@ __global__ void phase2(int *d_dist, int Round, int matrix_size) {
                 base_i = (2 * block_index + i) * BLOCK_SIZE + ty;
                 base_j = (2 * R + j) * BLOCK_SIZE + tx;
             }
-            d_dist[((2 * R + i) * BLOCK_SIZE + ty) * matrix_size + ((2 * R + j) * BLOCK_SIZE + tx)] = sharedPivot[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] ;
-            d_dist[base_i * matrix_size + base_j] = sharedBlock[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j];
+            device_dist[((2 * R + i) * BLOCK_SIZE + ty) * matrix_size + ((2 * R + j) * BLOCK_SIZE + tx)] = sharedPivot[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] ;
+            device_dist[base_i * matrix_size + base_j] = sharedBlock[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j];
         }
     }
     
 }
-__global__ void phase3(int *d_dist, int Round, int matrix_size) {
+__global__ void phase3(int *device_dist, int Round, int matrix_size) {
     int tx = threadIdx.x;
     int ty = threadIdx.y;
     int block_row = blockIdx.y;
@@ -193,15 +194,15 @@ __global__ void phase3(int *d_dist, int Round, int matrix_size) {
 
             int pivot_start = R * 2 * BLOCK_SIZE;
             
-            sharedRow[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] = d_dist[base_i * matrix_size + (pivot_start + j * BLOCK_SIZE + tx)];
-            sharedCol[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] = d_dist[(pivot_start + i * BLOCK_SIZE + ty) * matrix_size + base_j];
+            sharedRow[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] = device_dist[base_i * matrix_size + (pivot_start + j * BLOCK_SIZE + tx)];
+            sharedCol[ty + BLOCK_SIZE * i][tx + BLOCK_SIZE * j] = device_dist[(pivot_start + i * BLOCK_SIZE + ty) * matrix_size + base_j];
         }
     }
     
-    int sharedBlock_1 = d_dist[((2 * block_row) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col) * BLOCK_SIZE + tx];
-    int sharedBlock_2 = d_dist[((2 * block_row) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col + 1) * BLOCK_SIZE + tx];
-    int sharedBlock_3 = d_dist[((2 * block_row + 1) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col) * BLOCK_SIZE + tx];
-    int sharedBlock_4 = d_dist[((2 * block_row + 1) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col + 1) * BLOCK_SIZE + tx];
+    int sharedBlock_1 = device_dist[((2 * block_row) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col) * BLOCK_SIZE + tx];
+    int sharedBlock_2 = device_dist[((2 * block_row) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col + 1) * BLOCK_SIZE + tx];
+    int sharedBlock_3 = device_dist[((2 * block_row + 1) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col) * BLOCK_SIZE + tx];
+    int sharedBlock_4 = device_dist[((2 * block_row + 1) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col + 1) * BLOCK_SIZE + tx];
     
     __syncthreads();
     #pragma unroll 32
@@ -212,9 +213,9 @@ __global__ void phase3(int *d_dist, int Round, int matrix_size) {
         sharedBlock_4 = min(sharedBlock_4, sharedRow[ty + BLOCK_SIZE][k] + sharedCol[k][tx + BLOCK_SIZE]);
     }
     
-    d_dist[((2 * block_row) * BLOCK_SIZE + ty )* matrix_size + (2 * block_col) * BLOCK_SIZE + tx] = sharedBlock_1;
-    d_dist[((2 * block_row) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col + 1) * BLOCK_SIZE + tx] = sharedBlock_2;
-    d_dist[((2 * block_row + 1) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col) * BLOCK_SIZE + tx] = sharedBlock_3;
-    d_dist[((2 * block_row + 1) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col + 1) * BLOCK_SIZE + tx] = sharedBlock_4; 
+    device_dist[((2 * block_row) * BLOCK_SIZE + ty )* matrix_size + (2 * block_col) * BLOCK_SIZE + tx] = sharedBlock_1;
+    device_dist[((2 * block_row) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col + 1) * BLOCK_SIZE + tx] = sharedBlock_2;
+    device_dist[((2 * block_row + 1) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col) * BLOCK_SIZE + tx] = sharedBlock_3;
+    device_dist[((2 * block_row + 1) * BLOCK_SIZE + ty) * matrix_size + (2 * block_col + 1) * BLOCK_SIZE + tx] = sharedBlock_4; 
 }
 
